@@ -1,0 +1,1370 @@
+#!/usr/bin/bash
+
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+
+COMMAND=""
+NONE=0
+DATE_A=""
+DATE_B="9999-99-99"
+IS_FILE=0
+NUM_LINES=0
+IS_COMMAND=0
+FILE=""
+INPUT=""
+PRINTED=0
+IS_DATE_A=0
+IS_DATE_B=0
+IS_GENDER=0
+WIDTH=""
+IS_WIDTH=0
+#leap=0
+HISTOGRAM=0
+krizek='#'
+krizky=""
+max=0
+max_key=""
+max_counted=0
+max_key="none"
+print_error=""
+reg_bonus=0
+dist_bonus=0
+
+
+declare -A COMMAND_ARR
+declare -A DATE_ARR
+
+help()
+{
+	echo ""
+	echo "Usage: corona [-h] [FILTERS] [COMMAND] [LOG [LOG2 [...]]"
+	echo ""
+	echo "	-h		vypise napovedu"
+	echo "COMMAND:"
+	echo "	infected	vypise pocet nakazenych"
+	echo "	merge		slouci dohromady soubory se zaznamy"
+	echo "	gender		vypise pocet nakazenych pro jednotliva pohlavi"
+	echo "	age		vypise statistiku podle veku"
+	echo "	daily		vypise statistiku pro jednotlive dny"
+	echo "	monthly		vypise statistiku pro jednotlive mesice"
+	echo "	yearly		vypise statistiku pro jednotlive roky"
+	echo "	countries	vypise statistiku nakazenych osob pro jednotlive staty (bez CZ)"
+	echo "	districts	vypise statistiku nakazenych osob pro jednotlive okresy"
+	echo "	regions		vypise statistiku nakazenych osob pro jednotlive kraje"
+	echo ""
+	echo "FILTERS:"
+	echo "	-a DATETIME	zaznamy PO uvedenem datu (YYYY-MM-DD)"
+	echo "	-b DATETIME	zaznamy PRED uvedenym datem (YYYY-MM-DD)"
+	echo "	-g GENDER	zaznamy podle uvedeneho pohlavi (M-muz, Z-zena)"
+	printf "	-s [WIDTH]	pro prikazy gender, age, daily, monthly, yearly, countries, districts, regions\n			vypise data v podobe histogramu, volitelny parametr [WIDTH] urcuje delku nejdelsiho radku\n			[WIDTH] muze byt pouze kladne cele cislo"
+	echo ""
+}
+
+file_type()
+{
+	if [[ $FILE == "" ]] && [[ -p /dev/stdin ]]; then
+		INPUT=$(cat - | tr -d ' ')
+		return
+	elif [[ $IS_FILE == 1 ]]; then
+		INPUT=$(cat "$FILE" | tr -d ' ')
+		return
+	elif [[ $IS_FILE == 2 ]]; then
+		INPUT=$(gzip -cd "$FILE" | tr -d ' ')
+		return
+	elif [[ $IS_FILE == 3 ]]; then
+		INPUT=$(bzip2 -cd "$FILE" | tr -d ' ')
+		return
+	fi
+}
+
+infected()
+{
+	file_type
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		NUM_LINES=$((NUM_LINES + 1))
+	done <<< "$INPUT"
+}
+
+merge()
+{
+	file_type
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ $PRINTED == 0 ]]; then
+			echo "id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs"
+			PRINTED=1
+		fi
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		echo "$line"
+	done <<< "$INPUT"
+}
+
+gender()
+{
+	file_type	
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[3]} == 'M' ]]; then
+			COMMAND_ARR[M]=$((COMMAND_ARR[M] + 1))
+		fi
+		if [[ ${array[3]} == 'Z' ]]; then
+			COMMAND_ARR[Z]=$((COMMAND_ARR[Z] + 1))
+		fi
+		if [[ ${array[3]} == "" ]]; then
+			NONE=$((NONE + 1))
+		fi
+	done <<< "$INPUT"
+}
+
+age()
+{
+	file_type
+	age1="a0-5   " 
+	age2="b6-15  "
+	age3="c16-25 "
+	age4="d26-35 "
+	age5="e36-45 "
+	age6="f46-55 "
+	age7="g56-65 "
+	age8="h66-75 "
+	age9="i76-85 "
+	age10="j86-95 "
+	age11="k96-105"
+	age12="l>105  "
+	COMMAND_ARR[$age1]=0
+	COMMAND_ARR[$age2]=0
+	COMMAND_ARR[$age3]=0
+	COMMAND_ARR[$age4]=0
+	COMMAND_ARR[$age5]=0
+	COMMAND_ARR[$age6]=0
+	COMMAND_ARR[$age7]=0
+	COMMAND_ARR[$age8]=0
+	COMMAND_ARR[$age9]=0
+	COMMAND_ARR[$age10]=0
+	COMMAND_ARR[$age11]=0
+	COMMAND_ARR[$age12]=0
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[2]} == "" ]]; then
+			NONE=$((NONE + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 0 ]] && [[ ${array[2]} -lt 6 ]] && [[ ${array[2]} != "" ]]; then
+			COMMAND_ARR[$age1]=$((COMMAND_ARR[$age1] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 6 ]] && [[ ${array[2]} -lt 16 ]]; then
+			COMMAND_ARR[$age2]=$((COMMAND_ARR[$age2] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 16 ]] && [[ ${array[2]} -lt 26 ]]; then
+			COMMAND_ARR[$age3]=$((COMMAND_ARR[$age3] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 26 ]] && [[ ${array[2]} -lt 36 ]]; then
+			COMMAND_ARR[$age4]=$((COMMAND_ARR[$age4] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 36 ]] && [[ ${array[2]} -lt 46 ]]; then
+			COMMAND_ARR[$age5]=$((COMMAND_ARR[$age5] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 46 ]] && [[ ${array[2]} -lt 56 ]]; then
+			COMMAND_ARR[$age6]=$((COMMAND_ARR[$age6] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 56 ]] && [[ ${array[2]} -lt 66 ]]; then
+			COMMAND_ARR[$age7]=$((COMMAND_ARR[$age7] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 66 ]] && [[ ${array[2]} -lt 76 ]]; then
+			COMMAND_ARR[$age8]=$((COMMAND_ARR[$age8] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 76 ]] && [[ ${array[2]} -lt 86 ]]; then
+			COMMAND_ARR[$age9]=$((COMMAND_ARR[$age9] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 86 ]] && [[ ${array[2]} -lt 96 ]]; then
+			COMMAND_ARR[$age10]=$((COMMAND_ARR[$age10] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -ge 96 ]] && [[ ${array[2]} -lt 106 ]]; then
+			COMMAND_ARR[$age11]=$((COMMAND_ARR[$age11] + 1))
+			continue
+		fi
+		if [[ ${array[2]} -gt 105 ]]; then
+			COMMAND_ARR[$age12]=$((COMMAND_ARR[$age12] + 1))
+			continue
+		fi
+	done <<< "$INPUT"
+}
+
+daily()
+{
+	file_type	
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} == "" ]]; then
+			NONE=$((NONE + 1))
+			continue
+		fi
+		COMMAND_ARR[${array[1]}]=$((COMMAND_ARR[${array[1]}]+1))
+	done <<< "$INPUT"
+}
+
+monthly()
+{
+	file_type
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} == "" ]]; then
+			NONE=$((NONE + 1))
+			continue
+		fi
+		dash="-"
+		IFS='-' read -r -a array_2 <<< "${array[1]}"
+		ym="${array_2[0]}${dash}${array_2[1]}"
+		COMMAND_ARR[$ym]=$((COMMAND_ARR[$ym]+1))
+	done <<< "$INPUT"
+}
+
+yearly()
+{
+	file_type		
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} == "" ]]; then
+			NONE=$((NONE + 1))
+			continue
+		fi
+		IFS='-' read -r -a array_2 <<< "${array[1]}"
+		COMMAND_ARR[${array_2[0]}]=$((COMMAND_ARR[${array_2[0]}]+1))
+	done <<< "$INPUT"
+}
+
+countries()
+{	
+	file_type
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[7]} == "CZ" ]]; then
+			continue
+		fi
+		if [[ ${array[7]} == "" ]]; then
+			continue
+		fi
+		COMMAND_ARR[${array[7]}]=$((COMMAND_ARR[${array[7]}]+1))
+	done <<< "$INPUT"
+
+}
+
+districts()
+{
+	file_type
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[5]} == "" ]]; then
+			NONE=$((NONE + 1))
+			continue
+		fi
+		COMMAND_ARR[${array[5]}]=$((COMMAND_ARR["${array[5]}"]+1))
+	done <<< "$INPUT"
+}
+############ UPOZORNENI - na short bezi ~2 sec, na osoby.csv jsem radeji ani nezkousel ######
+districts_bonus()
+{
+	file_type
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+    	IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+	    while IFS='"' read cislo nazev nic kod kraj; do
+			if [[ ${array[5]} == "" ]]; then
+				NONE=$((NONE + 1))
+				continue
+			fi
+			if [[ ${array[5]} == $kod ]]; then
+				COMMAND_ARR[$nazev]=$((COMMAND_ARR["$nazev"]+1))
+				continue
+			fi
+		done < "$okresy"
+	done <<< "$INPUT"
+}
+
+regions()
+{
+	file_type
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[4]} == "" ]]; then
+			NONE=$((NONE + 1))
+			continue
+		fi
+		COMMAND_ARR[${array[4]}]=$((COMMAND_ARR["${array[4]}"]+1))
+	done <<< "$INPUT"
+}
+################## UPOZORNENI - na osoby.csv bezi ~15 minut, na short asi 0,5sec ####
+regions_bonus()
+{
+	file_type
+	while read -r line; do
+		if ! [[ "$line" =~ [^[:space:]] ]]; then
+        	continue
+    	fi
+    	IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[2]} == "vek" ]]; then
+			continue
+		fi
+		check_age "$line"
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+		if [[ ${array[1]} != "" ]]; then
+			if [[ ${DATE_ARR[${array[1]}]} == 2 ]]; then
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} == 1 ]]; then
+				printf "Invalid date: %s\n">&2 "$line"
+				continue
+			fi
+			if [[ ${DATE_ARR[${array[1]}]} != 0 ]]; then
+				check_date "${array[1]}"
+				value=$?
+				if [[ $value == 2 ]]; then
+					DATE_ARR[${array[1]}]=2
+					continue
+				elif [[ $value == 1 ]]; then
+					DATE_ARR[${array[1]}]=1
+					continue
+				fi
+			fi
+			DATE_ARR[${array[1]}]=0
+		fi
+		if [[ $IS_GENDER == 1 ]]; then
+			check_gender "$line"
+		fi
+		if [[ $? == 1 ]]; then
+			continue
+		fi
+	    while IFS='"' read cislo nazev nic kod cast; do
+			if [[ ${array[4]} == "" ]]; then
+				NONE=$((NONE + 1))
+				break
+			elif [[ ${array[4]} == "$kod" ]]; then
+				COMMAND_ARR[$nazev]=$((COMMAND_ARR["$nazev"]+1))
+				break
+			fi
+		done < "$kraje"
+	done <<< "$INPUT"
+}
+
+print_result()
+{
+	nl="\n"
+	date=""
+##### Trochu zmatek z odpovedi na foru ohledne otazky co ma byt na vystupu #########
+##### v pripade prazdneho souboru a prikazu (pokud hlavicka, mela by se pouzit #####
+##### zakomentovana cast, pokud bezny vystup podle prikazu, pouze s nulovymi #######
+##### hodnotami, tak vse funguje jak ma).                    #######################
+#	if [[ $IS_FILE == 0 ]]; then
+#		good=0
+#		for i in "${!COMMAND_ARR[@]}"; do
+#			if [[ ${COMMAND_ARR[$i]} -gt 0 ]]; then
+#				good=1
+#				break
+#			else
+#				good=0
+#			fi
+#		done
+#		if [[ $good == 0 ]]; then
+#			echo -e "id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs\n"
+#			exit 0
+#		fi
+#	fi
+	if [[ $reg_bonus == 1 && $COMMAND == regions ]] || [[ $dist_bonus == 1 && $COMMAND == "districts" ]]; then
+		for i in "${!COMMAND_ARR[@]}"; do
+			length=${#i}
+			if [[ $length -gt $max_len ]]; then
+				max_len=${length}
+			fi
+		done
+		for i in "${!COMMAND_ARR[@]}"; do
+			zaznam=$(printf "%-*s: %s" "$max_len" "$i" "${COMMAND_ARR[$i]}")
+			date="${date}${nl}${zaznam}"
+		done
+	else
+		for i in "${!COMMAND_ARR[@]}"; do
+			date="${date}${nl}${i}: ${COMMAND_ARR[$i]}" 
+		done
+	fi
+	if [[ $reg_bonus == 1 ]] && [[ $COMMAND == "regions" ]]; then
+		echo -e "$date" | sort | tail -n +2 | tr -d ''
+	elif [[ $dist_bonus == 1 ]] && [[ $COMMAND == "districts" ]]; then
+		echo -e "$date" | sort | tail -n +2 | tr -d ''
+	elif [[ $COMMAND == "age" ]]; then
+		echo -e "$date" | sort | tail -n +2 | tr -d 'abcdefghijkl'
+	else
+		echo -e "$date" | sort | tail -n +2
+	fi
+	if [ $NONE -gt 0 ]; then
+		if [[ $reg_bonus == 1 ]] && [[ $COMMAND == "regions" ]]; then
+			printf "%-*s: %s\n" "$max_len" "None" "$NONE"
+		elif [[ $dist_bonus == 1 ]] && [[ $COMMAND == "districts" ]]; then
+			printf "%-*s: %s\n" "$max_len" "None" "$NONE"
+		elif [[ $COMMAND == "age" ]]; then
+			echo "None  : $NONE"
+		else
+			echo "None: $NONE"
+		fi
+	fi
+}
+
+print_sharp()
+{
+	if [[ $IS_WIDTH == 0 ]];then
+		if [[ $COMMAND == "gender" ]] || [[ $COMMAND == "yearly" ]]; then
+			n=$((${COMMAND_ARR[$i]} / 100000))
+			o=$((NONE / 100000))
+			for i in $(seq $n); do	
+				krizky=${krizky}${krizek}
+			done
+			echo "$krizky"
+			return
+		fi
+		if [[ $COMMAND == "age" ]] || [[ $COMMAND == "monthly" ]] || [[ $COMMAND == "regions" ]]; then
+			n=$((${COMMAND_ARR[$i]} / 10000))
+			o=$((NONE / 10000))
+			for i in $(seq $n); do	
+				krizky=${krizky}${krizek}
+			done
+			echo "$krizky"
+			return
+		fi
+		if [[ $COMMAND == "daily" ]]; then
+			n=$((${COMMAND_ARR[$i]} / 500))
+			o=$((NONE / 500))
+			for i in $(seq $n); do	
+				krizky=${krizky}${krizek}
+			done
+			echo "$krizky"
+			return
+		fi
+		if [[ $COMMAND == "countries" ]]; then
+			n=$((${COMMAND_ARR[$i]} / 100))
+			o=$((NONE / 100))
+			for i in $(seq $n); do	
+				krizky=${krizky}${krizek}
+			done
+			echo "$krizky"
+			return
+		fi
+		if [[ $COMMAND == "districts" ]]; then
+			n=$((${COMMAND_ARR[$i]} / 1000))
+			o=$((NONE / 1000))
+			for i in $(seq $n); do	
+				krizky=${krizky}${krizek}
+			done
+			echo "$krizky"
+			return
+		fi
+	else
+		if [[ $max_counted == 0 ]]; then	
+			for x in "${!COMMAND_ARR[@]}"; do
+				if [[ ${COMMAND_ARR[$x]} -gt $max ]]; then
+					max=${COMMAND_ARR[$x]}
+					max_key=$x
+				fi
+			done
+			if [[ $NONE -gt $max ]]; then
+				max=$NONE
+				max_key="none"
+			fi
+			max_counted=1
+		fi
+		z=$((10 * max / WIDTH))
+		if [[ $i == "$max_key" ]]; then
+			n=$WIDTH
+			for x in $(seq $n); do	
+				krizky=${krizky}${krizek}
+			done
+			echo "$krizky"
+			return
+		else
+			n=$((10 * ${COMMAND_ARR[$i]} / z))
+			for i in $(seq $n); do	
+				krizky=${krizky}${krizek}
+			done
+			echo "$krizky"
+			return
+		fi
+	fi
+}
+
+print_histogram()
+{
+	nl="\n"
+	space=' '
+	date=""
+	if [[ $reg_bonus == 1 && $COMMAND == "regions" ]] || [[ $dist_bonus == 1 && $COMMAND == "districts" ]]; then
+		for i in "${!COMMAND_ARR[@]}"; do
+			length=${#i}
+			if [[ $length -gt $max_len ]]; then
+				max_len=${length}
+			fi
+		done
+		for i in "${!COMMAND_ARR[@]}"; do
+			sharp=$(print_sharp)
+			if [[ $sharp != "" ]]; then
+				sharp=${space}${sharp}
+			fi
+			zaznam=$(printf "%-*s:%s" "$max_len" "$i" "$sharp")
+			date="${date}${nl}${zaznam}"
+			if [[ ${COMMAND_ARR[$i]} -gt $max ]]; then
+				max=${COMMAND_ARR[$i]}
+				max_key=$i
+			fi
+		done
+	else
+		for i in "${!COMMAND_ARR[@]}"; do
+			sharp=$(print_sharp)
+			if [[ $sharp != "" ]]; then
+				sharp=${space}${sharp}
+			fi
+			date="${date}${nl}${i}:${sharp}"
+			if [[ ${COMMAND_ARR[$i]} -gt $max ]]; then
+				max=${COMMAND_ARR[$i]}
+				max_key=$i
+			fi
+		done
+	fi
+	if [[ $COMMAND == age ]]; then
+		echo -e "$date" | sort | tail -n +2 | tr -d 'abcdefghijkl'
+	else
+		echo -e "$date" | sort | tail -n +2
+	fi
+	if [ $NONE -gt 0 ]; then
+		if [[ $IS_WIDTH == 0 ]]; then
+			if [[ $COMMAND == "gender" ]] || [[ $COMMAND == "yearly" ]]; then
+				o=$((NONE / 100000))
+			fi
+			if [[ $COMMAND == "age" ]] || [[ $COMMAND == "monthly" ]] || [[ $COMMAND == "regions" ]]; then
+				o=$((NONE / 10000))
+			fi
+			if [[ $COMMAND == "daily" ]]; then
+				o=$((NONE / 500))
+			fi
+			if [[ $COMMAND == "countries" ]]; then
+				o=$((NONE / 100))
+			fi
+			if [[ $COMMAND == "districts" ]]; then
+				o=$((NONE / 1000))
+			fi
+			for i in $(seq $o); do
+				krizky=${krizky}${krizek}
+			done
+			if [[ $krizky != "" ]]; then
+				krizky=${space}${krizky}
+			fi
+			if [[ $reg_bonus == 1 ]] && [[ $COMMAND == "regions" ]]; then
+				printf "%-*s:%s" "$max_len" "None" "$krizky"
+			elif [[ $dist_bonus == 1 && $COMMAND == "districts" ]]; then
+				printf "%-*s:%s" "$max_len" "None" "$krizky"
+			else
+				echo "None:$krizky"
+			fi
+		else
+			z=$((10 * max / WIDTH))
+			if [[ $max_key == "none" ]]; then
+				o=$WIDTH
+			else
+				o=$((10 * NONE / z))
+			fi
+			for i in $(seq $o); do
+				krizky=${krizky}${krizek}
+			done
+			if [[ $krizky != "" ]]; then
+				krizky=${space}${krizky}
+			fi
+			if [[ $reg_bonus == 1 && $COMMAND == "regions" ]]; then
+				printf "%-*s:%s" "$max_len" "None" "$krizky"
+			elif [[ $dist_bonus == 1 && $COMMAND == "districts" ]]; then
+				printf "%-*s:%s" "$max_len" "None" "$krizky"
+			else
+				echo "None:$krizky"
+			fi
+		fi
+
+	fi
+}
+
+check_command()
+{
+	case $COMMAND in
+	"")merge
+	;;
+	infected)infected "$FILE"
+	;;
+	merge)merge "$FILE"
+	;;
+	gender)gender "$FILE"
+	;;
+	age)age
+	;;
+	daily)daily
+	;;
+	monthly)monthly
+	;;
+	yearly)yearly
+	;;
+	countries)countries "$FILE"
+	;;
+	districts)
+	if [[ $dist_bonus == 1 ]]; then
+		districts_bonus
+	else
+		districts
+	fi
+	;;
+	regions)
+	if [[ $reg_bonus == 1 ]]; then
+		regions_bonus
+	else
+		regions
+	fi
+	;;
+	esac
+}
+
+check_date()
+{	
+###### regex reduces runtime of script by ~25%, the version below works aswell, but is slower	
+	if ! [[ ${array[1]} =~ (^((([0-9][0-9])(([02468][048])|([13579][26]))-02-29)|((([0-9][0-9])([0-9][0-9])))-((((0[0-9])|(1[0-2]))-((0[0-9])|(1[0-9])|(2[0-8])))|((((0[13578])|(1[02]))-31)|(((0[1,3-9])|(1[0-2]))-(29|30)))))$) ]]; then
+		printf "Invalid date: %s\n">&2 "$line"
+		return 1
+	fi
+#		if [[ ${array[1]} == "" ]]; then
+#			return 1;
+#		fi
+#    	IFS='-' read -r -a array_2 <<< "${array[1]}"
+#
+####### regex odstranuje pocatecni 0 v mesici (napr 03 -> 3), aby bylo mozny ciselne porovnavat
+#
+#	   	array_2[2]=$(echo "${array_2[2]}" | sed 's/^0*//g')
+#
+####### obecna kontrola roku, zapornych mesicu/dni 
+#
+#    	if [[ ${array_2[0]} -lt 1970 ]] || [[ ${array_2[2]} -lt 1 ]] || [[ ${array_2[0]} -gt 9999 ]]; then
+#    		printf "Invalid date: %s\n">&2 "$line"
+#       		return 1
+#    	fi
+#   	case ${array_2[1]} in
+#
+############ pokud je mesic unor, zkontroluje prestupny rok, jinak kontroluje jestli je pocet dni>28
+#
+#	    	02) if (( array_2[0] % 4 == 0 )) && (( array_2[0] % 100 != 0 )); then
+#					leap=1
+#				elif (( array_2[0] % 400 == 0 )) && (( array_2[0] % 100 == 0 )); then
+#					leap=1
+#				fi
+#				if [[ ${array_2[2]} -gt 28 ]]; then
+#					if [[ ${array_2[2]} == 29 ]]  && [[ $leap == 1 ]]; then
+#						return 0
+#					else
+#   					printf "Invalid date: %s\n">&2 "$line"
+#						return 1
+#					fi
+#				fi
+#	    	;;
+#
+########### pro tyto mesice kontroluje pocet dni>31
+#
+#	    	01|03|05|07|08|10|12)
+#			if [[ ${array_2[2]} -gt 31 ]]; then
+#	    		printf "Invalid date: %s\n">&2 "$line"
+#	        	return 1
+#	    	fi
+#			;;
+#
+########### pro tyto mesice kontroluje pocet dni>30
+#
+#			04|06|09|11)
+#			if [[ ${array_2[2]} -gt 30 ]]; then
+#	    		printf "Invalid date: %s\n">&2 "$line"
+#	        	return 1
+#	    	fi
+#			;;
+#			*)
+#   		printf "Invalid date: %s\n">&2 "$line"
+#			return 1
+#			;;
+#		esac
+#	fi
+##### filtrace data podle -a nebo -b
+	if [[ $IS_DATE_B == 1 ]] || [[ $IS_DATE_A == 1 ]];then
+        if [[ ${array[1]} < $DATE_A ]] || [[ ${array[1]} > $DATE_B ]]; then
+            return 2
+        fi
+	fi
+}
+
+check_gender()
+{
+	if [[ ${array[3]} != "$GENDER" ]]; then
+        return 1
+    fi
+}
+
+check_age()
+{
+	if [[ ${array[2]} =~ ^[0-9]+$ ]] || [[ ${array[2]} == "" ]]; then
+	    return 0
+	else
+		printf "Invalid age: %s\n">&2 "$line"
+    	return 1
+    fi
+}
+
+if [[ -p /dev/stdin ]] && [[ $# == 0 ]]; then
+	merge
+fi
+
+while [[ $# -gt 0 ]]; do
+	case $1 in
+	-h)
+	if [[ $IS_FILE != 0 ]]; then
+		printf "\nWARNING: Dodrzujte korektni poradi argumentu.\n">&2
+		help
+		exit 1
+	fi
+	if [[ $IS_COMMAND == 1 ]]; then
+		printf "\nWARNING: Dodrzujte korektni poradi argumentu.\n">&2
+		help
+		exit 1
+	fi
+	help
+	exit 0
+	;;
+	-a)
+	if [[ $IS_FILE != 0 ]]; then
+		printf "\nERROR: Dodrzujte korektni poradi argumentu.\n">&2
+		exit 1
+	fi
+	if [[ $IS_COMMAND == 1 ]]; then
+		printf "\nERROR: Dodrzujte korektni poradi argumentu.\n">&2
+		exit 1
+	fi
+	if [[ $IS_DATE_A == 1 ]]; then
+		printf "\nERROR: Kazdy filtr muze byt zadan pouze jednou.\n">&2
+		exit 1
+	fi
+	(date -d "$2") 1>/dev/null 2>/dev/null
+	if [[ $? == 1 ]]; then
+		printf "\nERROR: Chybne datum.\n">&2
+		exit 1
+	fi
+	DATE_A="$2"
+	IS_DATE_A=1
+	shift
+	shift
+	;;
+	-b)
+	if [[ $IS_FILE != 0 ]]; then
+		printf "\nERROR: Dodrzujte korektni poradi argumentu.\n">&2
+		exit 1
+	fi
+	if [[ $IS_COMMAND == 1 ]]; then
+		printf "\nERROR: Dodrzujte korektni poradi argumentu.\n">&2
+		exit 1
+	fi
+	if [[ $IS_DATE_B == 1 ]]; then
+		printf "Kazdy filtr muze byt zadan pouze jednou\n">&2
+		exit 1
+	fi
+	(date -d "$2") 1>/dev/null 2>/dev/null
+	if [[ $? -eq 1 ]]; then
+		printf "\nERROR: Chybne datum.\n">&2
+		exit 1
+	fi
+	DATE_B="$2"
+	IS_DATE_B=1
+	shift
+	shift
+	;;
+	-r)
+	reg_bonus=1
+	if [[ $2 == kraje.csv ]]; then
+		kraje=$2
+	else
+		printf "\nERROR: Chybny argument.">&2
+		exit 1
+	fi
+	shift
+	shift
+	;;
+	-d)
+	dist_bonus=1
+	if [[ $2 == okresy.csv ]]; then
+		okresy=$2
+	else
+		printf "\nERROR: Chybny argument.">&2
+		exit 1
+	fi
+	shift
+	shift
+	;;
+	-g)
+	if [[ $IS_FILE != 0 ]]; then
+		printf "\nERROR: Dodrzujte korektni poradi argumentu.\n">&2
+		exit 1
+	fi
+	if [[ $IS_COMMAND == 1 ]]; then
+		printf "\nERROR: Dodrzujte korektni poradi argumentu.\n">&2
+		exit 1
+	fi
+	if [[ $IS_GENDER == 1 ]]; then
+		printf "\nERROR: Kazdy filtr muze byt zadan pouze jednou.\n">&2
+		exit 1
+	fi
+	GENDER="$2"
+	if [[ $GENDER != 'M' ]] && [[ $GENDER != "Z" ]]; then
+		printf "\nERROR: Pohlavi muze byt pouze muz(M) nebo zena(Z) (pouze velka pismena).\n">&2
+		exit 1
+	fi
+	IS_GENDER=1
+	shift
+	shift
+	;;
+	kraje.csv)
+	if [[ $reg_bonus == 0 ]]; then
+		printf "\nERROR: Nejdrive zadejte prepinac -r, nasledne soubor s kraji.\n">&2
+		exit 1
+	fi
+	printf "\nERROR: Soubor se seznamem kraju zadejte ihned po prepinaci -r a pouze jednou.\n">&2
+	;;
+	okresy.csv)
+	if [[ $dist_bonus == 0 ]]; then
+		printf "\nERROR: Nejdrive zadejte prepinac -d, nasledne soubor s okresy.\n">&2
+		exit 1
+	fi
+	printf "\nERROR: Soubor se seznamem okresu zadejte ihned po prepinaci -d a pouze jednou.\n">&2
+	;;
+	-s)
+	if [[ $IS_FILE != 0 ]]; then
+		printf "\nERROR: Dodrzujte korektni poradi argumentu.\n">&2
+		exit 1
+	fi
+	if [[ $IS_COMMAND == 1 ]]; then
+		printf "\nERROR: Dodrzujte korektni poradi argumentu.\n">&2
+		exit 1
+	fi
+	rgx='^[0-9]+$' 						
+	if [[ $2 =~ $rgx ]]; then
+		WIDTH="$2"
+		if [[ $WIDTH -le 0 ]]; then
+			printf "\nERROR: Sirka muze byt poze nezaporne cele cislo.\n">&2
+			exit 1
+		fi
+		IS_WIDTH=1
+		shift
+		shift
+	else
+		shift
+	fi
+	HISTOGRAM=1
+	;;
+	infected|merge|gender|age|daily|monthly|yearly|countries|districts|regions)
+	if [[ $IS_FILE != 0 ]]; then
+		printf "\nERROR: Dodrzujte korektni poradi argumentu.\n">&2
+		exit 1
+	fi
+	if [[ $IS_COMMAND == 1 ]]; then
+		printf "\nERROR: Zadejte maximalne jeden command.\n">&2
+		exit 1
+	fi
+	COMMAND=$1
+	IS_COMMAND=1
+	check_command
+	shift
+	;;	
+	*.csv.gz)
+	IS_FILE=2
+	FILE=$1
+	check_command "$FILE"
+	shift
+	;;
+	*.csv.bz2)
+	IS_FILE=3
+	FILE=$1
+	check_command "$FILE"
+	shift
+	;;
+	*.csv)
+	IS_FILE=1
+	FILE=$1
+	check_command "$FILE"
+	shift
+	;;
+	*)
+	printf "\nERROR: Neocekavany vstup.\nZkontrolujte vstupni parametry nebo vyzkousejte -h.\n">&2
+	exit 1
+	;;
+	esac
+done
+
+if ! [[ -p /dev/stdin ]] && [[ $IS_FILE == 0 ]]; then
+	echo "id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs"
+	PRINTED=1
+	while read -r line; do
+		IFS=',' read -r -a array <<< "$line"
+		if [[ ${array[1]} == "vek" ]] && [[ $PRINTED == 1 ]]; then 
+			continue
+		fi
+		echo "$line"
+	done <<< "$(cat -)"
+fi
+
+if ([[ -p /dev/stdin ]] && [[ $IS_FILE == 0 ]] && [[ $COMMAND == "" ]]) || ([[ -p /dev/stdin ]] && [[ $IS_FILE == 0 ]] && [[ $COMMAND == "merge" ]]); then
+	if [[ $PRINTED != 1 ]]; then
+		echo "id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs"
+    fi
+    while read -r line; do    
+        IFS=',' read -r -a array <<< "$line"
+        if [[ ${array[1]} == "datum" ]]; then
+            continue
+        fi
+        echo "$line"
+    done
+fi
+
+case $COMMAND in
+	infected)
+	echo "$NUM_LINES"
+	if [[ $print_error != "" ]]; then
+		echo -e "$print_error" | sort | tail -n +2>&2
+	fi
+	;;
+	age|gender|daily|monthly|yearly|countries|districts|regions)
+	if [[ $HISTOGRAM == 0 ]]; then
+		print_result
+		if [[ $print_error != "" ]]; then
+			echo -e "$print_error" | tail -n +2>&2
+		fi
+	else
+		print_histogram
+		if [[ $print_error != "" ]]; then
+			echo -e "$print_error" | tail -n +2>&2
+		fi
+	fi
+	;;
+esac
+
+
+###################################################################################################
+###################################################################################################
